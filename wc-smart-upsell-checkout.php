@@ -1,8 +1,8 @@
 <?php
 /**
  * Plugin Name: WC Smart Upsell Checkout for WoodMart
- * Description: Generic, lightweight complementary-product recommendations for WooCommerce checkout. Uses purchase history first and product context as fallback, with native WooCommerce/WoodMart product cards.
- * Version: 6.0.0
+ * Description: Manually linked complementary-product recommendations for WooCommerce checkout, with native WooCommerce/WoodMart product cards.
+ * Version: 6.1.0
  * Author: AliRezaMoghimian
  * Requires at least: 5.8
  * Requires PHP: 7.4
@@ -16,12 +16,11 @@ if (!class_exists('WC_Smart_Upsell_Checkout')) {
 
 final class WC_Smart_Upsell_Checkout {
 
-    const VERSION    = '6.0.0';
+    const VERSION    = '6.1.0';
     const OPTION_KEY = 'wc_smart_upsell_settings';
     const NONCE      = 'wc_suc_nonce';
 
-    private static $context_cache = [];
-    private static $history_cache = null;
+    const COMPLEMENTS_META_KEY = '_wc_suc_complement_ids';
 
     public function __construct() {
 
@@ -74,6 +73,9 @@ final class WC_Smart_Upsell_Checkout {
             [$this, 'ajax_recommendations']
         );
 
+        add_action('woocommerce_product_options_related', [$this, 'complement_field']);
+        add_action('woocommerce_admin_process_product_object', [$this, 'save_complements']);
+
         add_action(
             'admin_menu',
             [$this, 'admin_menu']
@@ -94,7 +96,6 @@ final class WC_Smart_Upsell_Checkout {
                 'title'    => 'پیشنهادهای تکمیلی برای خرید شما',
                 'subtitle' => 'برای تکمیل خریدتان، این محصولات هم ممکن است به کارتان بیاید.',
                 'count'    => 4,
-                'history'  => 'yes',
             ]
         );
     }
@@ -237,11 +238,6 @@ final class WC_Smart_Upsell_Checkout {
 
             'count' => $count,
 
-            'history' => (
-                ($input['history'] ?? 'yes') === 'yes'
-            )
-                ? 'yes'
-                : 'no',
         ];
     }
 
@@ -261,10 +257,10 @@ final class WC_Smart_Upsell_Checkout {
             <h1>Smart Upsell Checkout</h1>
 
             <p>
-                پیشنهادها برای همه نوع محصول به‌صورت خودکار ساخته می‌شوند.
-                ابتدا از خریدهای واقعی هم‌زمان استفاده می‌شود و در صورت نبود
-                داده کافی، دسته‌بندی، ویژگی، تگ و عنوان محصول به‌عنوان fallback
-                استفاده می‌شوند.
+                پیشنهادها فقط از محصولات مکملی انتخاب می‌شوند که در ویرایش هر محصول،
+                بخش «محصولات مرتبط»، مشخص کرده‌اید. مکمل‌های مرتبط با تعداد بیشتری
+                از محصولات سبد خرید، اولویت بالاتری دارند. در اولویت برابر، ترتیب
+                انتخاب مکمل‌ها ملاک است. اگر مکملی تعریف نشده باشد، پیشنهادی نمایش داده نمی‌شود.
             </p>
 
             <form method="post" action="options.php">
@@ -379,32 +375,7 @@ final class WC_Smart_Upsell_Checkout {
 
                     </tr>
 
-                    <tr>
 
-                        <th>سابقه خرید</th>
-
-                        <td>
-
-                            <label>
-
-                                <input
-                                    type="checkbox"
-                                    name="<?php echo $key; ?>[history]"
-                                    value="yes"
-                                    <?php checked(
-                                        $settings['history'],
-                                        'yes'
-                                    ); ?>
-                                >
-
-                                استفاده از محصولات واقعاً هم‌خریدشده
-                                در سفارش‌های قبلی
-
-                            </label>
-
-                        </td>
-
-                    </tr>
 
                 </table>
 
@@ -470,8 +441,7 @@ final class WC_Smart_Upsell_Checkout {
         );
 
         $products = $this->recommend(
-            $limit,
-            $settings['history'] === 'yes'
+            $limit
         );
 
         if (!$products) {
@@ -666,1293 +636,119 @@ final class WC_Smart_Upsell_Checkout {
         );
     }
 
-    private function recommend(
-        $limit = 4,
-        $use_history = true
-    ) {
-
-        $cart_ids = $this->cart_ids();
-        $source_ids = $this->source_ids();
-
-        if (!$source_ids) {
-            return [];
-        }
-
-        sort($cart_ids);
-        sort($source_ids);
-
-        $cache_key =
-            'wc_suc_v6_' .
-            md5(
-                wp_json_encode(
-                    [
-                        $source_ids,
-                        $cart_ids,
-                        $limit,
-                        $use_history ? 1 : 0
-                    ]
-                )
-            );
-
-        $cached = get_transient(
-            $cache_key
-        );
-
-        if (
-            is_array($cached) &&
-            $cached
-        ) {
-
-            $out = [];
-
-            foreach ($cached as $id) {
-
-                $product = wc_get_product(
-                    $id
-                );
-
-                if (
-                    $product &&
-                    !in_array(
-                        $product->get_id(),
-                        $cart_ids,
-                        true
-                    ) &&
-                    $product->exists() &&
-                    $product->is_visible() &&
-                    $product->is_in_stock() &&
-                    $product->is_purchasable()
-                ) {
-
-                    $out[] = $product;
-                }
-            }
-
-            if ($out) {
-                return array_slice(
-                    $out,
-                    0,
-                    $limit
-                );
-            }
-        }
-
-        $contexts = [];
-
-        foreach ($source_ids as $id) {
-
-            $contexts[$id] =
-                $this->context($id);
-        }
-
-        $scores = [];
-
-        /*
-         * سیگنال اصلی:
-         * محصولات واقعاً هم‌خریدشده در سفارش‌های قبلی.
-         */
-        if ($use_history) {
-
-            $history =
-                $this->co_purchase_matrix(
-                    $source_ids
-                );
-
-            foreach (
-                $history as $source_id => $items
-            ) {
-
-                foreach (
-                    $items as $candidate_id => $count
-                ) {
-
-                    $candidate_id =
-                        absint($candidate_id);
-
-                    if (
-                        !$candidate_id ||
-                        in_array(
-                            $candidate_id,
-                            $cart_ids,
-                            true
-                        )
-                    ) {
-                        continue;
-                    }
-
-                    $scores[$candidate_id] =
-                        ($scores[$candidate_id] ?? 0)
-                        + 80
-                        + min(
-                            120,
-                            $count * 15
-                        );
-                }
-            }
-        }
-
-        /*
-         * Cold Start:
-         * دسته‌بندی + عنوان + ویژگی + تگ.
-         */
-        $candidate_ids = [];
-
-        foreach ($contexts as $ctx) {
-
-            $candidate_ids = array_merge(
-                $candidate_ids,
-                $this->cold_start_candidates(
-                    $ctx
-                )
-            );
-        }
-
-        $candidate_ids =
-            array_values(
-                array_unique(
-                    array_filter(
-                        array_map(
-                            'absint',
-                            $candidate_ids
-                        )
-                    )
-                )
-            );
-
-        foreach ($candidate_ids as $candidate_id) {
-
-            if (
-                in_array(
-                    $candidate_id,
-                    $cart_ids,
-                    true
-                )
-            ) {
-                continue;
-            }
-
-            $candidate =
-                wc_get_product(
-                    $candidate_id
-                );
-
-            if (
-                !$candidate ||
-                !$candidate->exists() ||
-                !$candidate->is_visible() ||
-                !$candidate->is_in_stock() ||
-                !$candidate->is_purchasable()
-            ) {
-                continue;
-            }
-
-            $candidate_context =
-                $this->context(
-                    $candidate_id
-                );
-
-            $best = -9999;
-
-            foreach (
-                $contexts as $source_context
-            ) {
-
-                $score =
-                    $this->complement_score(
-                        $source_context,
-                        $candidate_context
-                    );
-
-                if ($score > $best) {
-                    $best = $score;
-                }
-            }
-
-            if ($best < 20) {
-                continue;
-            }
-
-            $scores[$candidate_id] =
-                ($scores[$candidate_id] ?? 0)
-                + $best;
-        }
-
-        if (!$scores) {
-            return [];
-        }
-
-        arsort(
-            $scores,
-            SORT_NUMERIC
-        );
-
-        $result = [];
-        $families = [];
-
-        foreach (
-            $scores as $id => $score
-        ) {
-
-            if (
-                count($result) >= $limit
-            ) {
-                break;
-            }
-
-            $product =
-                wc_get_product($id);
-
-            if (!$product) {
-                continue;
-            }
-
-            $ctx =
-                $this->context($id);
-
-            $family =
-                $this->family_key($ctx);
-
-            /*
-             * جلوگیری از نمایش چند محصول
-             * از یک خانواده مشابه.
-             */
-            if (
-                $family !== '' &&
-                isset($families[$family])
-            ) {
-                continue;
-            }
-
-            $result[] = $product;
-
-            if ($family !== '') {
-                $families[$family] = true;
-            }
-        }
-
-        $ids = array_map(
-            static function ($product) {
-                return $product->get_id();
-            },
-            $result
-        );
-
-        if ($ids) {
-
-            set_transient(
-                $cache_key,
-                $ids,
-                2 * HOUR_IN_SECONDS
-            );
-        }
-
-        return $result;
-    }
-
     /**
-     * ساخت ماتریس خرید مشترک.
-     *
-     * فقط تعداد محدودی سفارش اخیر بررسی می‌شود
-     * تا فشار روی Checkout پایین بماند.
+     * Uses WooCommerce's existing searchable linked-product control.
+     * Relations are directional and saved with the product's normal update action.
      */
-    private function co_purchase_matrix($source_ids) {
+    public function complement_field() {
+        global $product_object;
 
-        $source_ids =
-            array_values(
-                array_unique(
-                    array_map(
-                        'absint',
-                        (array) $source_ids
-                    )
-                )
-            );
-
-        if (
-            !$source_ids ||
-            !function_exists('wc_get_orders')
-        ) {
-            return [];
+        if (!$product_object instanceof WC_Product) {
+            return;
         }
 
-        $cache_key =
-            'wc_suc_hist_' .
-            md5(
-                wp_json_encode(
-                    $source_ids
-                )
-            );
-
-        $cached =
-            get_transient(
-                $cache_key
-            );
-
-        if (is_array($cached)) {
-            return $cached;
-        }
-
-        $matrix = [];
-
-        foreach ($source_ids as $id) {
-            $matrix[$id] = [];
-        }
-
-        /*
-         * فقط 30 سفارش اخیر در یک سال گذشته.
-         */
-        $orders = wc_get_orders(
-            [
-                'status' => [
-                    'wc-processing',
-                    'wc-completed',
-                    'wc-on-hold'
-                ],
-
-                'limit' => 30,
-
-                'orderby' => 'date',
-
-                'order' => 'DESC',
-
-                'return' => 'objects',
-
-                'date_created' =>
-                    '>' .
-                    (
-                        time() -
-                        YEAR_IN_SECONDS
-                    ),
-            ]
-        );
-
-        foreach (
-            (array) $orders
-            as $order
-        ) {
-
-            if (
-                !$order instanceof WC_Order
-            ) {
-                continue;
-            }
-
-            $products_in_order = [];
-
-            foreach (
-                $order->get_items(
-                    'line_item'
-                ) as $item
-            ) {
-
-                $product_id =
-                    absint(
-                        $item->get_product_id()
-                    );
-
-                if ($product_id) {
-                    $products_in_order[
-                        $product_id
-                    ] = true;
-                }
-
-                $variation_id =
-                    absint(
-                        $item->get_variation_id()
-                    );
-
-                if ($variation_id) {
-                    $products_in_order[
-                        $variation_id
-                    ] = true;
-                }
-            }
-
-            if (!$products_in_order) {
-                continue;
-            }
-
-            $products_in_order =
-                array_keys(
-                    $products_in_order
-                );
-
-            foreach (
-                $source_ids as $source_id
-            ) {
-
-                if (
-                    !in_array(
-                        $source_id,
-                        $products_in_order,
-                        true
-                    )
-                ) {
-                    continue;
-                }
-
-                foreach (
-                    $products_in_order
-                    as $candidate_id
-                ) {
-
-                    if (
-                        $candidate_id ===
-                        $source_id
-                    ) {
+        $ids = (array) $product_object->get_meta(self::COMPLEMENTS_META_KEY, true);
+        ?>
+        <p class="form-field">
+            <label for="wc_suc_complement_ids">محصولات مکمل</label>
+            <select class="wc-product-search" multiple="multiple"
+                id="wc_suc_complement_ids" name="wc_suc_complement_ids[]"
+                style="width: 50%;"
+                data-sortable="true"
+                data-placeholder="جست‌وجوی محصول مکمل…"
+                data-action="woocommerce_json_search_products_and_variations"
+                data-exclude="<?php echo esc_attr($product_object->get_id()); ?>"
+                aria-describedby="wc-suc-complements-help">
+                <?php foreach ($ids as $id) :
+                    $product = wc_get_product(absint($id));
+                    if (!$product) {
                         continue;
                     }
-
-                    if (
-                        in_array(
-                            $candidate_id,
-                            $source_ids,
-                            true
-                        )
-                    ) {
-                        continue;
-                    }
-
-                    $matrix[$source_id][
-                        $candidate_id
-                    ] =
-                        (
-                            $matrix[$source_id][
-                                $candidate_id
-                            ] ?? 0
-                        ) + 1;
-                }
-            }
-        }
-
-        foreach (
-            $matrix as &$items
-        ) {
-
-            arsort(
-                $items,
-                SORT_NUMERIC
-            );
-
-            $items =
-                array_slice(
-                    $items,
-                    0,
-                    30,
-                    true
-                );
-        }
-
-        unset($items);
-
-        set_transient(
-            $cache_key,
-            $matrix,
-            2 * HOUR_IN_SECONDS
-        );
-
-        return $matrix;
+                    ?>
+                    <option value="<?php echo esc_attr($product->get_id()); ?>" selected="selected"><?php echo esc_html($product->get_formatted_name()); ?></option>
+                <?php endforeach; ?>
+            </select>
+            <input type="hidden" name="wc_suc_complements_present" value="1">
+            <span class="description" id="wc-suc-complements-help">محصولاتی را انتخاب کنید که همراه این محصول کاربرد دارند، نه مدل‌های جایگزین آن. ترتیب انتخاب، اولویت نمایش در امتیاز برابر است. رابطه یک‌طرفه است.</span>
+        </p>
+        <?php
     }
 
-    private function cold_start_candidates($ctx) {
+    public function save_complements($product) {
+        // WooCommerce verifies the product edit nonce and permissions before this hook.
+        // Skip other save flows that do not include this field (for example quick edit).
+        if (!isset($_POST['wc_suc_complements_present'])) {
+            return;
+        }
 
+        $input = isset($_POST['wc_suc_complement_ids']) && is_array($_POST['wc_suc_complement_ids'])
+            ? wp_unslash($_POST['wc_suc_complement_ids'])
+            : [];
         $ids = [];
 
-        $cats =
-            $ctx['categories'];
-
-        if (!$cats) {
-            return $ids;
-        }
-
-        $leaf =
-            $ctx['leaf_categories'];
-
-        $parents =
-            $ctx['parent_categories'];
-
-        $tax = [];
-
-        if ($parents) {
-
-            $tax[] = [
-                'taxonomy' => 'product_cat',
-                'field'    => 'term_id',
-                'terms'    => $parents,
-                'operator' => 'IN',
-            ];
-        }
-
-        if ($leaf) {
-
-            $tax[] = [
-                'taxonomy' => 'product_cat',
-                'field'    => 'term_id',
-                'terms'    => $leaf,
-                'operator' => 'IN',
-            ];
-        }
-
-        if ($tax) {
-
-            $tax_query =
-                count($tax) > 1
-                    ? array_merge(
-                        ['relation' => 'OR'],
-                        $tax
-                    )
-                    : $tax;
-
-            $query =
-                new WP_Query(
-                    [
-                        'post_type' => 'product',
-
-                        'post_status' => 'publish',
-
-                        'posts_per_page' => 70,
-
-                        'fields' => 'ids',
-
-                        'no_found_rows' => true,
-
-                        'ignore_sticky_posts' => true,
-
-                        'update_post_meta_cache' => false,
-
-                        'update_post_term_cache' => false,
-
-                        'tax_query' => $tax_query,
-                    ]
-                );
-
-            if (!empty($query->posts)) {
-
-                $ids =
-                    $query->posts;
+        foreach ($input as $value) {
+            if (!is_scalar($value)) {
+                continue;
             }
-
-            wp_reset_postdata();
-        }
-
-        /*
-         * فقط چند Token معنادار.
-         */
-        $tokens =
-            array_slice(
-                $this->useful_tokens(
-                    $ctx['tokens']
-                ),
-                0,
-                3
-            );
-
-        foreach ($tokens as $token) {
-
-            $query =
-                new WP_Query(
-                    [
-                        'post_type' => 'product',
-
-                        'post_status' => 'publish',
-
-                        'posts_per_page' => 15,
-
-                        'fields' => 'ids',
-
-                        's' => $token,
-
-                        'no_found_rows' => true,
-
-                        'ignore_sticky_posts' => true,
-
-                        'update_post_meta_cache' => false,
-
-                        'update_post_term_cache' => false,
-                    ]
-                );
-
-            if (!empty($query->posts)) {
-
-                $ids =
-                    array_merge(
-                        $ids,
-                        $query->posts
-                    );
+            $id = absint($value);
+            $candidate = $id ? wc_get_product($id) : false;
+            if (!$candidate || $id === $product->get_id() || $candidate->get_parent_id() === $product->get_id()) {
+                continue;
             }
-
-            wp_reset_postdata();
+            $ids[] = $id;
         }
 
-        return $ids;
+        $product->update_meta_data(self::COMPLEMENTS_META_KEY, array_values(array_unique($ids)));
     }
 
-    private function complement_score($a, $b) {
+    private function recommend($limit = 4) {
+        $cart_ids = $this->cart_ids();
+        $candidates = [];
 
-        if (!$a || !$b) {
-            return -1000;
-        }
-
-        $score = 0;
-
-        $shared_cat =
-            count(
-                array_intersect(
-                    $a['categories'],
-                    $b['categories']
-                )
-            );
-
-        $shared_parent =
-            count(
-                array_intersect(
-                    $a['parent_categories'],
-                    $b['parent_categories']
-                )
-            );
-
-        $shared_attr =
-            count(
-                array_intersect(
-                    $a['attributes'],
-                    $b['attributes']
-                )
-            );
-
-        $shared_tokens =
-            count(
-                array_intersect(
-                    $a['tokens'],
-                    $b['tokens']
-                )
-            );
-
-        if ($shared_parent) {
-
-            $score += min(
-                30,
-                $shared_parent * 15
-            );
-        }
-
-        if ($shared_cat) {
-
-            $score += min(
-                16,
-                $shared_cat * 8
-            );
-        }
-
-        if ($shared_attr) {
-
-            $score += min(
-                24,
-                $shared_attr * 6
-            );
-        }
-
-        if ($shared_tokens) {
-
-            $score += min(
-                18,
-                $shared_tokens * 3
-            );
-        }
-
-        if (
-            $a['leaf_categories'] &&
-            $b['leaf_categories'] &&
-            !array_intersect(
-                $a['leaf_categories'],
-                $b['leaf_categories']
-            )
-        ) {
-
-            $score += 25;
-
-        } elseif (
-            array_intersect(
-                $a['leaf_categories'],
-                $b['leaf_categories']
-            )
-        ) {
-
-            $score -= 18;
-        }
-
-        if (
-            $this->same_family(
-                $a,
-                $b
-            )
-        ) {
-
-            $score -= 65;
-
-        } else {
-
-            $score += 18;
-        }
-
-        if (
-            $a['brand'] !== '' &&
-            $b['brand'] !== '' &&
-            $a['brand'] === $b['brand']
-        ) {
-
-            $score += 4;
-        }
-
-        return $score;
-    }
-
-    private function same_family($a, $b) {
-
-        return
-            !empty($a['leaf_categories']) &&
-            !empty($b['leaf_categories']) &&
-            (bool) array_intersect(
-                $a['leaf_categories'],
-                $b['leaf_categories']
-            );
-    }
-
-    private function family_key($ctx) {
-
-        if (
-            !empty(
-                $ctx['leaf_categories']
-            )
-        ) {
-
-            $leaf =
-                $ctx['leaf_categories'];
-
-            sort($leaf);
-
-            return
-                'cat:' .
-                implode(
-                    ',',
-                    array_slice(
-                        $leaf,
-                        0,
-                        2
-                    )
-                );
-        }
-
-        return '';
-    }
-
-    private function context($id) {
-
-        $id = absint($id);
-
-        if (
-            isset(
-                self::$context_cache[$id]
-            )
-        ) {
-
-            return self::$context_cache[$id];
-        }
-
-        $product =
-            wc_get_product($id);
-
-        if (!$product) {
-
-            return
-                self::$context_cache[$id] = [
-                    'categories'        => [],
-                    'leaf_categories'   => [],
-                    'parent_categories' => [],
-                    'attributes'        => [],
-                    'tokens'            => [],
-                    'brand'             => '',
-                ];
-        }
-
-        $texts = [
-            $product->get_name()
-        ];
-
-        $cats =
-            wp_get_post_terms(
-                $id,
-                'product_cat',
-                [
-                    'fields' => 'all'
-                ]
-            );
-
-        if (is_wp_error($cats)) {
-            $cats = [];
-        }
-
-        $cat_ids = [];
-        $leaf = [];
-        $parents = [];
-
-        foreach ($cats as $cat) {
-
-            $cat_ids[] =
-                (int) $cat->term_id;
-
-            $texts[] =
-                $cat->name;
-
-            $children =
-                get_term_children(
-                    $cat->term_id,
-                    'product_cat'
-                );
-
-            if (
-                !is_wp_error($children) &&
-                empty($children)
-            ) {
-
-                $leaf[] =
-                    (int) $cat->term_id;
-            }
-
-            foreach (
-                (array) get_ancestors(
-                    $cat->term_id,
-                    'product_cat'
-                ) as $ancestor_id
-            ) {
-
-                $ancestor_id =
-                    (int) $ancestor_id;
-
-                $parents[] =
-                    $ancestor_id;
-
-                $cat_ids[] =
-                    $ancestor_id;
-
-                $term =
-                    get_term(
-                        $ancestor_id,
-                        'product_cat'
-                    );
-
-                if (
-                    $term &&
-                    !is_wp_error($term)
-                ) {
-
-                    $texts[] =
-                        $term->name;
-                }
-            }
-        }
-
-        $tags =
-            wp_get_post_terms(
-                $id,
-                'product_tag',
-                [
-                    'fields' => 'names'
-                ]
-            );
-
-        if (!is_wp_error($tags)) {
-
-            $texts =
-                array_merge(
-                    $texts,
-                    $tags
-                );
-        }
-
-        $attrs = [];
-
-        foreach (
-            $product->get_attributes()
-            as $attribute
-        ) {
-
-            if (
-                !$attribute
-                instanceof WC_Product_Attribute
-            ) {
+        foreach ($this->source_ids() as $source_id) {
+            $source = wc_get_product($source_id);
+            if (!$source) {
                 continue;
             }
 
-            if (
-                $attribute->is_taxonomy()
-            ) {
+            $ids = array_values(array_unique(array_filter(array_map(
+                'absint', (array) $source->get_meta(self::COMPLEMENTS_META_KEY, true)
+            ))));
 
-                $terms =
-                    wp_get_post_terms(
-                        $id,
-                        $attribute->get_name(),
-                        [
-                            'fields' => 'names'
-                        ]
-                    );
-
-                if (!is_wp_error($terms)) {
-
-                    foreach (
-                        $terms as $term_name
-                    ) {
-
-                        $attrs[] =
-                            $term_name;
-
-                        $texts[] =
-                            $term_name;
-                    }
+            foreach ($ids as $position => $id) {
+                if (!isset($candidates[$id])) {
+                    $candidates[$id] = ['connections' => 0, 'position' => 0];
                 }
-
-            } else {
-
-                foreach (
-                    (array)
-                    $attribute->get_options()
-                    as $value
-                ) {
-
-                    $attrs[] =
-                        $value;
-
-                    $texts[] =
-                        $value;
-                }
+                $candidates[$id]['connections']++;
+                $candidates[$id]['position'] += $position;
             }
         }
 
-        if (!$leaf) {
-            $leaf = $cat_ids;
-        }
+        uksort($candidates, static function ($a, $b) use ($candidates) {
+            $first = $candidates[$a];
+            $second = $candidates[$b];
+            return ($second['connections'] <=> $first['connections'])
+                ?: ($first['position'] <=> $second['position'])
+                ?: ($a <=> $b);
+        });
 
-        $brand = '';
-
-        foreach (
-            [
-                'pa_brand',
-                'pa_brands',
-                'brand'
-            ] as $taxonomy
-        ) {
-
-            $names =
-                wp_get_post_terms(
-                    $id,
-                    $taxonomy,
-                    [
-                        'fields' => 'names'
-                    ]
-                );
-
-            if (
-                !is_wp_error($names) &&
-                $names
-            ) {
-
-                $brand =
-                    $this->norm(
-                        $names[0]
-                    );
-
+        $result = [];
+        foreach ($candidates as $id => $rank) {
+            $product = wc_get_product($id);
+            if (!$product || !$product->exists() || !$product->is_visible()
+                || !$product->is_in_stock() || !$product->is_purchasable()
+                || in_array($id, $cart_ids, true)
+                || ($product->get_parent_id() && in_array($product->get_parent_id(), $cart_ids, true))) {
+                continue;
+            }
+            $result[] = $product;
+            if (count($result) >= $limit) {
                 break;
             }
         }
 
-        if ($brand === '') {
-
-            $brand =
-                $this->norm(
-                    $product->get_attribute(
-                        'brand'
-                    )
-                );
-        }
-
-        $result = [
-
-            'categories' =>
-                array_values(
-                    array_unique(
-                        array_map(
-                            'absint',
-                            $cat_ids
-                        )
-                    )
-                ),
-
-            'leaf_categories' =>
-                array_values(
-                    array_unique(
-                        array_map(
-                            'absint',
-                            $leaf
-                        )
-                    )
-                ),
-
-            'parent_categories' =>
-                array_values(
-                    array_unique(
-                        array_map(
-                            'absint',
-                            $parents
-                        )
-                    )
-                ),
-
-            'attributes' =>
-                $this->normalize(
-                    $attrs
-                ),
-
-            'tokens' =>
-                $this->tokens(
-                    $this->norm(
-                        implode(
-                            ' ',
-                            $texts
-                        )
-                    )
-                ),
-
-            'brand' => $brand,
-        ];
-
-        self::$context_cache[$id] =
-            $result;
-
+        // Read current product metadata each time so edits take effect immediately.
         return $result;
-    }
-
-    private function useful_tokens($tokens) {
-
-        $out = [];
-
-        foreach (
-            (array) $tokens
-            as $token
-        ) {
-
-            if (
-                $this->strlen($token) >= 3
-            ) {
-
-                $out[] =
-                    $token;
-            }
-        }
-
-        return array_values(
-            array_unique($out)
-        );
-    }
-
-    private function tokens($text) {
-
-        $text =
-            preg_replace(
-                '/[^\p{L}\p{N}]+/u',
-                ' ',
-                $text
-            );
-
-        $parts =
-            preg_split(
-                '/\s+/u',
-                $text,
-                -1,
-                PREG_SPLIT_NO_EMPTY
-            );
-
-        $stop = [
-
-            'برای',
-            'با',
-            'و',
-            'از',
-            'در',
-            'به',
-            'این',
-            'آن',
-            'یک',
-            'های',
-            'ها',
-            'روی',
-            'مخصوص',
-            'مناسب',
-            'قیمت',
-            'خرید',
-            'فروش',
-            'اصل',
-            'اصلی',
-            'اورجینال',
-            'شرکتی',
-            'جدید',
-            'جدیدترین',
-            'محصول',
-            'کالا',
-            'مدل',
-            'سایز',
-            'رنگ',
-            'عدد',
-            'است',
-            'را',
-            'که',
-            'یا',
-            'هم',
-            'بر',
-            'تا',
-            'هر'
-        ];
-
-        $out = [];
-
-        foreach (
-            (array) $parts
-            as $part
-        ) {
-
-            if (
-                in_array(
-                    $part,
-                    $stop,
-                    true
-                )
-            ) {
-                continue;
-            }
-
-            if (
-                $this->strlen($part) < 2
-            ) {
-                continue;
-            }
-
-            $out[] =
-                $part;
-        }
-
-        return array_values(
-            array_unique($out)
-        );
-    }
-
-    private function normalize($values) {
-
-        $out = [];
-
-        foreach (
-            (array) $values
-            as $value
-        ) {
-
-            $value =
-                $this->norm($value);
-
-            if ($value !== '') {
-
-                $out[] =
-                    $value;
-            }
-        }
-
-        return array_values(
-            array_unique($out)
-        );
-    }
-
-    private function strlen($text) {
-
-        return function_exists(
-            'mb_strlen'
-        )
-            ? mb_strlen(
-                $text,
-                'UTF-8'
-            )
-            : strlen($text);
-    }
-
-    private function strtolower($text) {
-
-        return function_exists(
-            'mb_strtolower'
-        )
-            ? mb_strtolower(
-                $text,
-                'UTF-8'
-            )
-            : strtolower($text);
-    }
-
-    private function norm($text) {
-
-        $text =
-            wp_strip_all_tags(
-                (string) $text
-            );
-
-        $text =
-            str_replace(
-                [
-                    'ي',
-                    'ى',
-                    'ئ',
-                    'ك',
-                    'ة',
-                    'ۀ',
-                    'ؤ'
-                ],
-                [
-                    'ی',
-                    'ی',
-                    'ی',
-                    'ک',
-                    'ه',
-                    'ه',
-                    'و'
-                ],
-                $text
-            );
-
-        $text =
-            strtr(
-                $text,
-                [
-                    '۰'=>'0',
-                    '۱'=>'1',
-                    '۲'=>'2',
-                    '۳'=>'3',
-                    '۴'=>'4',
-                    '۵'=>'5',
-                    '۶'=>'6',
-                    '۷'=>'7',
-                    '۸'=>'8',
-                    '۹'=>'9',
-
-                    '٠'=>'0',
-                    '١'=>'1',
-                    '٢'=>'2',
-                    '٣'=>'3',
-                    '٤'=>'4',
-                    '٥'=>'5',
-                    '٦'=>'6',
-                    '٧'=>'7',
-                    '٨'=>'8',
-                    '٩'=>'9'
-                ]
-            );
-
-        return trim(
-            $this->strtolower(
-                $text
-            )
-        );
     }
 }
 
