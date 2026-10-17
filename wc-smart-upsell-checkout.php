@@ -2,7 +2,7 @@
 /**
  * Plugin Name: WC Smart Upsell Checkout for WoodMart
  * Description: Manually linked complementary-product recommendations for WooCommerce checkout, with native WooCommerce/WoodMart product cards.
- * Version: 6.1.0
+ * Version: 6.2.0
  * Author: AliRezaMoghimian
  * Requires at least: 5.8
  * Requires PHP: 7.4
@@ -16,7 +16,7 @@ if (!class_exists('WC_Smart_Upsell_Checkout')) {
 
 final class WC_Smart_Upsell_Checkout {
 
-    const VERSION    = '6.1.0';
+    const VERSION    = '6.2.0';
     const OPTION_KEY = 'wc_smart_upsell_settings';
     const NONCE      = 'wc_suc_nonce';
 
@@ -72,6 +72,11 @@ final class WC_Smart_Upsell_Checkout {
             'wp_ajax_nopriv_wc_suc_recommendations',
             [$this, 'ajax_recommendations']
         );
+
+        require_once __DIR__ . '/includes/class-wc-suc-admin.php';
+        new WC_SUC_Admin();
+
+        add_filter('option_page_capability_wc_smart_upsell_settings_group', static function () { return 'manage_woocommerce'; });
 
         add_action('woocommerce_product_options_related', [$this, 'complement_field']);
         add_action('woocommerce_admin_process_product_object', [$this, 'save_complements']);
@@ -167,6 +172,8 @@ final class WC_Smart_Upsell_Checkout {
                     )
                 ),
                 'delay'   => 650,
+                'title'   => $settings['title'],
+                'subtitle' => $settings['subtitle'],
             ]
         );
     }
@@ -183,8 +190,8 @@ final class WC_Smart_Upsell_Checkout {
 
         add_submenu_page(
             'woocommerce',
-            'Smart Upsell Checkout',
-            'Smart Upsell Checkout',
+            'مدیریت محصولات مکمل',
+            'محصولات مکمل',
             'manage_woocommerce',
             'wc-smart-upsell-checkout',
             [$this, 'settings_page']
@@ -252,18 +259,15 @@ final class WC_Smart_Upsell_Checkout {
         $key = esc_attr(self::OPTION_KEY);
         ?>
 
-        <div class="wrap">
+        <div class="wrap suc-admin">
 
-            <h1>Smart Upsell Checkout</h1>
+            <h1>مدیریت محصولات مکمل</h1>
+            <p class="suc-intro">مکمل‌های مناسب را برای هر محصول انتخاب کنید تا پیشنهادهای تسویه‌حساب دقیق‌تر باشند.</p>
+            <?php settings_errors(); WC_SUC_Admin::page(); ?>
+            <details class="suc-panel suc-settings">
+            <summary>تنظیمات نمایش در تسویه‌حساب</summary>
 
-            <p>
-                پیشنهادها فقط از محصولات مکملی انتخاب می‌شوند که در ویرایش هر محصول،
-                بخش «محصولات مرتبط»، مشخص کرده‌اید. مکمل‌های مرتبط با تعداد بیشتری
-                از محصولات سبد خرید، اولویت بالاتری دارند. در اولویت برابر، ترتیب
-                انتخاب مکمل‌ها ملاک است. اگر مکملی تعریف نشده باشد، پیشنهادی نمایش داده نمی‌شود.
-            </p>
-
-            <form method="post" action="options.php">
+            <form method="post" action="options.php" novalidate>
 
                 <?php
                 settings_fields(
@@ -275,12 +279,12 @@ final class WC_Smart_Upsell_Checkout {
 
                     <tr>
 
-                        <th>فعال بودن</th>
+                        <th><label for="suc-enabled">فعال بودن</label></th>
 
                         <td>
 
                             <select
-                                name="<?php echo $key; ?>[enabled]"
+                                id="suc-enabled" name="<?php echo $key; ?>[enabled]"
                             >
 
                                 <option
@@ -311,14 +315,14 @@ final class WC_Smart_Upsell_Checkout {
 
                     <tr>
 
-                        <th>عنوان</th>
+                        <th><label for="suc-title">عنوان</label></th>
 
                         <td>
 
                             <input
                                 class="regular-text"
                                 type="text"
-                                name="<?php echo $key; ?>[title]"
+                                id="suc-title" name="<?php echo $key; ?>[title]"
                                 value="<?php echo esc_attr($settings['title']); ?>"
                             >
 
@@ -328,14 +332,14 @@ final class WC_Smart_Upsell_Checkout {
 
                     <tr>
 
-                        <th>توضیح</th>
+                        <th><label for="suc-subtitle">توضیح</label></th>
 
                         <td>
 
                             <input
                                 class="regular-text"
                                 type="text"
-                                name="<?php echo $key; ?>[subtitle]"
+                                id="suc-subtitle" name="<?php echo $key; ?>[subtitle]"
                                 value="<?php echo esc_attr($settings['subtitle']); ?>"
                             >
 
@@ -345,12 +349,12 @@ final class WC_Smart_Upsell_Checkout {
 
                     <tr>
 
-                        <th>تعداد محصولات</th>
+                        <th><label for="suc-count">تعداد محصولات</label></th>
 
                         <td>
 
                             <select
-                                name="<?php echo $key; ?>[count]"
+                                id="suc-count" name="<?php echo $key; ?>[count]"
                             >
 
                                 <?php
@@ -382,6 +386,7 @@ final class WC_Smart_Upsell_Checkout {
                 <?php submit_button('ذخیره تنظیمات'); ?>
 
             </form>
+            </details>
 
         </div>
 

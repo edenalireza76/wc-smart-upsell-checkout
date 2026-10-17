@@ -9,10 +9,12 @@ function WC() { return $GLOBALS['wc']; }
 class WC_Product {
     public $id, $links, $parent = 0, $stock = true, $visible = true, $purchasable = true;
     function __construct($id, $links = []) { $this->id = $id; $this->links = $links; }
+    function get_formatted_name() { return 'Product ' . $this->id; }
     function get_id() { return $this->id; }
     function get_parent_id() { return $this->parent; }
     function get_meta(...$args) { return $this->links; }
     function update_meta_data($key, $value) { $this->links = $value; }
+    function save() { return $this->id; }
     function exists() { return true; }
     function is_visible() { return $this->visible; }
     function is_in_stock() { return $this->stock; }

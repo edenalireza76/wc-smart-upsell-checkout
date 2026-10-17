@@ -23,3 +23,16 @@ php tests/recommendations.php
 ```
 
 These isolated rule tests do not replace integration checks in WordPress. Verify search, ordering, saving/reloading, clearing selections, and checkout product cards in a staging store with the actual WooCommerce/WoodMart versions. The block product editor is not integrated by this field.
+
+## Manage multiple products (6.2)
+
+Open **WooCommerce → محصولات مکمل**. Search by name/SKU, filter by category or products without complements, and browse 20 products per page. Change a row's selections and click **ذخیره**. Select rows for bulk add, replace or remove; replacement and removal ask for confirmation. Selection applies only to the current page, and writes run individually with per-row results. Failed rows remain selected. Resolve any unsaved row edits before a bulk operation.
+
+The manager and product editor share the same metadata. Saves require management and individual product edit permissions; stale manager edits are rejected. This check does not provide transactional locking against simultaneous requests. Checkout title/subtitle settings now reach the popup as well.
+
+Additional checks:
+
+```sh
+php tests/admin.php
+node --check assets/admin.js
+```
